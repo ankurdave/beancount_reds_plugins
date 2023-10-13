@@ -2,7 +2,6 @@
 
 import re
 import time
-from ast import literal_eval
 from beancount.core import data
 
 DEBUG = 0
@@ -29,10 +28,13 @@ def rename_accounts(entries, options_map, config):  # noqa: C901
     errors = []
 
     renames = dict([(re.compile(pattern), replacement)
-                    for pattern, replacement in literal_eval(config).items()])
+                    for pattern, replacement in eval(config).items()])
 
-    def rename_account(account):
-        """Apply 'renames' to 'account'.
+    def rename_account(account, entry, txn):
+        """Apply 'renames' to 'account' occurring within 'entry'.
+
+        If 'renames' contains a callable function and 'txn' is not None, first
+        calls that function on 'txn' to obtain the resulting account name regex.
 
         Return the resulting account name and whether or not it was renamed.
 
@@ -40,20 +42,24 @@ def rename_accounts(entries, options_map, config):  # noqa: C901
         nonlocal rename_count
         was_renamed = False
         for pattern, replacement in renames.items():
+            if callable(replacement):
+                if txn is None: continue
+                replacement = replacement(posting, txn)
+            assert isinstance(replacement, str)
             account, num_replacements = pattern.subn(replacement, account)
             if num_replacements > 0:
                 rename_count += 1
                 was_renamed = True
         return account, was_renamed
 
-    def rename_account_in_entry(entry, account_attr='account'):
+    def rename_account_in_entry(entry, account_attr='account', txn=None):
         """Apply 'renames' to 'getattr(entry, account_attr)'.
 
         Return the resulting entry and whether or not it was renamed.
 
         """
         old_account = getattr(entry, account_attr)
-        new_account, was_renamed = rename_account(old_account)
+        new_account, was_renamed = rename_account(old_account, entry, txn)
         new_entry = entry._replace(**{account_attr: new_account}) if was_renamed else entry
         return new_entry, was_renamed
 
@@ -62,7 +68,7 @@ def rename_accounts(entries, options_map, config):  # noqa: C901
             new_postings = []
             any_posting_changed = False
             for posting in entry.postings:
-                new_posting, was_renamed = rename_account_in_entry(posting)
+                new_posting, was_renamed = rename_account_in_entry(posting, txn=entry)
                 any_posting_changed = any_posting_changed or was_renamed
                 new_postings.append(new_posting)
             new_entry = entry._replace(postings=new_postings) if any_posting_changed else entry
